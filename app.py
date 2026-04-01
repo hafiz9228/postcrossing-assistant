@@ -1414,8 +1414,7 @@ with tabs[3]:
                 st.error(str(e))
 
         if st.button("📂 Open Backups Folder"):
-            import os
-            os.startfile(BACKUPS_FOLDER)
+            st.warning("Opening local folders is only available on your computer (not in web app).")
 
     with col_backup2:
         st.caption("Creates a timestamped backup of your database.")
