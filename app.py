@@ -1,16 +1,25 @@
 import base64
 import json
-import sqlite3
 import uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from pathlib import Path
-
 import requests
 import streamlit as st
+from pathlib import Path
+from supabase import create_client, Client
 
 # ===== CONFIG =====
-from config import DB_PATH, IMAGES_FOLDER, BACKUPS_FOLDER, LLM_API_KEY, LLM_BASE_URL, LLM_MODEL
+from config import (
+    DB_PATH,
+    IMAGES_FOLDER,
+    BACKUPS_FOLDER,
+    LLM_API_KEY,
+    LLM_BASE_URL,
+    LLM_MODEL,
+    SUPABASE_URL,
+    SUPABASE_ANON_KEY,
+    SUPABASE_BUCKET,
+)
 
 THEME_MAP = {
     "Anime/Manga": "AN",
@@ -45,30 +54,18 @@ STOPWORDS = {
 def now_kl():
     return datetime.now(ZoneInfo("Asia/Kuala_Lumpur"))
 
-def get_connection():
-    return sqlite3.connect(DB_PATH)
+@st.cache_resource
+def get_supabase() -> Client:
+    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+        raise ValueError("Missing SUPABASE_URL or SUPABASE_ANON_KEY.")
+    return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
-import shutil
+def get_public_image_url(storage_path: str) -> str:
+    if not storage_path:
+        return ""
+    supabase = get_supabase()
+    return supabase.storage.from_(SUPABASE_BUCKET).get_public_url(storage_path)
 
-def backup_database():
-    timestamp = now_kl().strftime("%Y%m%d_%H%M%S")
-    backup_path = BACKUPS_FOLDER / f"postcards_backup_{timestamp}.db"
-
-    shutil.copy(DB_PATH, backup_path)
-
-    return backup_path
-
-def list_backups():
-    return sorted(
-        BACKUPS_FOLDER.glob("postcards_backup_*.db"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True
-    )
-
-
-def restore_database(backup_file):
-    if not backup_file.exists():
-        raise FileNotFoundError(f"Backup file not found: {backup_file}")
 
     # create safety backup before restore
     safety_backup = BACKUPS_FOLDER / f"pre_restore_{now_kl().strftime('%Y%m%d_%H%M%S')}.db"
