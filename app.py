@@ -66,14 +66,6 @@ def get_public_image_url(storage_path: str) -> str:
     supabase = get_supabase()
     return supabase.storage.from_(SUPABASE_BUCKET).get_public_url(storage_path)
 
-
-    # create safety backup before restore
-    safety_backup = BACKUPS_FOLDER / f"pre_restore_{now_kl().strftime('%Y%m%d_%H%M%S')}.db"
-    shutil.copy(DB_PATH, safety_backup)
-
-    # restore selected backup
-    shutil.copy(backup_file, DB_PATH)
-
 def init_db():
     conn = get_connection()
     cur = conn.cursor()
@@ -1159,7 +1151,7 @@ Rules:
 
 
 # ===== INIT =====
-init_db()
+# init_db()
 
 # ===== UI =====
 st.set_page_config(page_title="Postcrossing Assistant", layout="wide")
@@ -1399,50 +1391,7 @@ with tabs[2]:
 with tabs[3]:
     st.header("Stock")
 
-    col_backup1, col_backup2 = st.columns([1, 2])
-
-    with col_backup1:
-        if st.button("💾 Backup Database"):
-            try:
-                backup_path = backup_database()
-                st.success(f"Backup created: {backup_path.name}")
-                st.caption(str(backup_path))
-            except Exception as e:
-                st.error(str(e))
-
-        if st.button("📂 Open Backups Folder"):
-            st.warning("Opening local folders is only available on your computer (not in web app).")
-
-    with col_backup2:
-        st.caption("Creates a timestamped backup of your database.")
-
-        backups = list_backups()
-
-        if not backups:
-            st.info("No backups found yet.")
-        else:
-            selected_backup_name = st.selectbox(
-                "Select backup to restore",
-                [b.name for b in backups]
-            )
-
-            selected_backup = next(b for b in backups if b.name == selected_backup_name)
-
-            confirm_restore = st.checkbox(
-                "I understand this will overwrite the current database.",
-                key="confirm_restore_db"
-            )
-
-            if st.button("♻️ Restore Selected Backup"):
-                if not confirm_restore:
-                    st.warning("Please confirm restore first.")
-                else:
-                    try:
-                        restore_database(selected_backup)
-                        st.success(f"Restored from: {selected_backup.name}")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(str(e))
+st.info("Backup disabled (Supabase migration in progress)")
 
     stock_subtabs = st.tabs(["Restock Suggestions", "Theme Stocks", "Request Signals"])
 
