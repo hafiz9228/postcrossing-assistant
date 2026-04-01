@@ -18,3 +18,7 @@ BACKUPS_FOLDER.mkdir(parents=True, exist_ok=True)
 LLM_API_KEY = os.getenv("LLM_API_KEY")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "").rstrip("/")
 LLM_MODEL = os.getenv("LLM_MODEL")
+
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "postcard-images")
