@@ -50,7 +50,7 @@ STOPWORDS = {
 }
 
 
-# ===== DB HELPERS =====
+# ===== DB HELPERS (SUPABASE VERSION) =====
 def now_kl():
     return datetime.now(ZoneInfo("Asia/Kuala_Lumpur"))
 
@@ -60,567 +60,144 @@ def get_supabase() -> Client:
         raise ValueError("Missing SUPABASE_URL or SUPABASE_ANON_KEY.")
     return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
-def get_public_image_url(storage_path: str) -> str:
-    if not storage_path:
-        return ""
-    supabase = get_supabase()
-    return supabase.storage.from_(SUPABASE_BUCKET).get_public_url(storage_path)
-
-def init_db():
-    conn = get_connection()
-    cur = conn.cursor()
-
-    # Postcards table
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS postcards (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        code TEXT UNIQUE,
-        description TEXT,
-        theme TEXT,
-        tags TEXT,
-        status TEXT NOT NULL DEFAULT 'in_stock',
-        image_path TEXT,
-        date_added TEXT DEFAULT CURRENT_TIMESTAMP,
-        date_sent TEXT,
-        notes TEXT
-    )
-    """)
-
-    # Request logs table
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS request_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        request_text TEXT,
-        extracted_preferences TEXT,
-        suggested_codes TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-
-    conn.commit()
-    conn.close()
-
 
 def fetch_all_postcards():
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT id, code, description, theme, tags, status, image_path, date_added, date_sent, notes
-        FROM postcards
-        ORDER BY id DESC
-    """)
-
-    rows = cur.fetchall()
-    conn.close()
-    return rows
+    supabase = get_supabase()
+    res = supabase.table("postcards").select("*").order("id", desc=True).execute()
+    return res.data
 
 
 def fetch_draft_postcards():
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT id, image_path, notes, date_added
-        FROM postcards
-        WHERE status = 'draft'
-        ORDER BY id DESC
-    """)
-
-    rows = cur.fetchall()
-    conn.close()
-    return rows
+    supabase = get_supabase()
+    res = supabase.table("postcards").select("*").eq("status", "draft").execute()
+    return res.data
 
 
 def get_postcard_by_id(postcard_id):
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT id, code, description, theme, tags, status, image_path, notes, date_sent
-        FROM postcards
-        WHERE id = ?
-    """, (postcard_id,))
-
-    row = cur.fetchone()
-    conn.close()
-
-    if row is None:
-        return None
-
-    return {
-        "id": row[0],
-        "code": row[1],
-        "description": row[2],
-        "theme": row[3],
-        "tags": row[4],
-        "status": row[5],
-        "image_path": row[6],
-        "notes": row[7],
-        "date_sent": row[8],
-    }
+    supabase = get_supabase()
+    res = supabase.table("postcards").select("*").eq("id", postcard_id).single().execute()
+    return res.data
 
 
 def get_postcard_by_code(code):
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT id, code, description, theme, tags, status, image_path, notes, date_sent
-        FROM postcards
-        WHERE code = ?
-    """, (code,))
-
-    row = cur.fetchone()
-    conn.close()
-
-    if row is None:
-        return None
-
-    return {
-        "id": row[0],
-        "code": row[1],
-        "description": row[2],
-        "theme": row[3],
-        "tags": row[4],
-        "status": row[5],
-        "image_path": row[6],
-        "notes": row[7],
-        "date_sent": row[8],
-    }
+    supabase = get_supabase()
+    res = supabase.table("postcards").select("*").eq("code", code).single().execute()
+    return res.data
 
 
 def delete_postcard_by_id(postcard_id):
-    postcard = get_postcard_by_id(postcard_id)
-    if not postcard:
-        raise ValueError("Postcard not found.")
-
-    image_path = postcard["image_path"]
-
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM postcards WHERE id = ?", (postcard_id,))
-    conn.commit()
-    conn.close()
-
-    if image_path:
-        path_obj = Path(image_path)
-        if path_obj.exists():
-            try:
-                path_obj.unlink()
-            except Exception:
-                pass
+    supabase = get_supabase()
+    supabase.table("postcards").delete().eq("id", postcard_id).execute()
 
 
 def add_image_draft(uploaded_file):
+    supabase = get_supabase()
+
     unique_name = f"{uuid.uuid4().hex}_{uploaded_file.name}"
-    image_path = IMAGES_FOLDER / unique_name
 
-    with open(image_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
+    # upload to Supabase storage
+    supabase.storage.from_(SUPABASE_BUCKET).upload(
+        unique_name,
+        uploaded_file.getvalue()
+    )
 
-    conn = get_connection()
-    cur = conn.cursor()
+    res = supabase.table("postcards").insert({
+        "status": "draft",
+        "image_path": unique_name,
+        "notes": "Draft created from UI upload"
+    }).execute()
 
-    cur.execute("""
-        INSERT INTO postcards (code, description, theme, tags, status, image_path, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (
-        None,
-        None,
-        None,
-        None,
-        "draft",
-        str(image_path),
-        "Draft created from UI upload"
-    ))
-
-    conn.commit()
-    postcard_id = cur.lastrowid
-    conn.close()
-
-    return postcard_id, str(image_path)
+    return res.data[0]["id"], unique_name
 
 
 def generate_next_code(theme_abbr):
-    conn = get_connection()
-    cur = conn.cursor()
+    supabase = get_supabase()
 
-    cur.execute("""
-        SELECT code
-        FROM postcards
-        WHERE code LIKE ?
-          AND code IS NOT NULL
-        ORDER BY code DESC
-        LIMIT 1
-    """, (f"{theme_abbr}%",))
+    res = supabase.table("postcards") \
+        .select("code") \
+        .like("code", f"{theme_abbr}%") \
+        .order("code", desc=True) \
+        .limit(1) \
+        .execute()
 
-    row = cur.fetchone()
-    conn.close()
-
-    if row is None:
+    if not res.data:
         return f"{theme_abbr}001"
 
-    last_code = row[0]
+    last_code = res.data[0]["code"]
     last_number = int(last_code[-3:])
-    next_number = last_number + 1
-    return f"{theme_abbr}{next_number:03d}"
-
-
-def clean_tags(tags):
-    cleaned = []
-
-    for tag in tags:
-        if not isinstance(tag, str):
-            continue
-
-        t = tag.strip().lower()
-        if not t:
-            continue
-        if t in BLOCKED_TAGS:
-            continue
-        if t not in cleaned:
-            cleaned.append(t)
-
-    return cleaned
+    return f"{theme_abbr}{last_number + 1:03d}"
 
 
 def update_postcard_from_analysis(postcard_id, description, theme, tags):
-    if theme not in THEME_MAP:
-        raise ValueError(f"Invalid theme: {theme}")
-
     theme_abbr = THEME_MAP[theme]
     code = generate_next_code(theme_abbr)
-    tags_text = "; ".join(tags)
 
-    conn = get_connection()
-    cur = conn.cursor()
+    supabase = get_supabase()
 
-    cur.execute("""
-        UPDATE postcards
-        SET code = ?,
-            description = ?,
-            theme = ?,
-            tags = ?,
-            status = ?,
-            notes = ?,
-            date_added = CURRENT_TIMESTAMP
-        WHERE id = ?
-    """, (
-        code,
-        description,
-        theme,
-        tags_text,
-        "in_stock",
-        "Updated by AI analysis in UI",
-        postcard_id
-    ))
-
-    conn.commit()
-    conn.close()
+    supabase.table("postcards").update({
+        "code": code,
+        "description": description,
+        "theme": theme,
+        "tags": "; ".join(tags),
+        "status": "in_stock",
+        "notes": "Updated by AI"
+    }).eq("id", postcard_id).execute()
 
     return code
 
+
 def update_postcard_fields(postcard_id, description, theme, tags, status, notes):
-    if theme not in THEME_MAP:
-        raise ValueError(f"Invalid theme: {theme}")
+    supabase = get_supabase()
 
-    tags_text = "; ".join(clean_tags([tag.strip() for tag in tags.split(";")])) if tags else ""
+    update_data = {
+        "description": description,
+        "theme": theme,
+        "tags": tags,
+        "status": status,
+        "notes": notes
+    }
 
-    conn = get_connection()
-    cur = conn.cursor()
+    if status == "sent":
+        update_data["date_sent"] = now_kl().strftime("%Y-%m-%d")
 
-    today = now_kl().strftime("%Y-%m-%d") if status == "sent" else None
+    supabase.table("postcards").update(update_data).eq("id", postcard_id).execute()
 
-    cur.execute("""
-        UPDATE postcards
-        SET description = ?,
-            theme = ?,
-            tags = ?,
-            status = ?,
-            notes = ?,
-            date_sent = CASE 
-                WHEN ? = 'sent' THEN ?
-                ELSE NULL
-            END
-        WHERE id = ?
-    """, (
-        description.strip() if description else "",
-        theme,
-        tags_text,
-        status,
-        notes.strip() if notes else "",
-        status,
-        today,
-        postcard_id
-    ))
-
-    conn.commit()
-    conn.close()
-    
 
 def mark_sent(code, notes=None):
-    postcard = get_postcard_by_code(code)
-
-    if not postcard:
-        raise ValueError("Postcard code not found.")
-
-    if postcard["status"] == "sent":
-        raise ValueError(f"Postcard already marked as sent on {postcard['date_sent']}.")
-
+    supabase = get_supabase()
     today = now_kl().strftime("%Y-%m-%d")
 
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        UPDATE postcards
-        SET status = ?,
-            date_sent = ?,
-            notes = ?
-        WHERE code = ?
-    """, ("sent", today, notes, code))
-
-    conn.commit()
-    conn.close()
+    supabase.table("postcards").update({
+        "status": "sent",
+        "date_sent": today,
+        "notes": notes
+    }).eq("code", code).execute()
 
     return today
 
 
 def mark_sent_by_recommendation(code):
-    postcard = get_postcard_by_code(code)
-
-    if not postcard:
-        raise ValueError("Postcard code not found.")
-
-    if postcard["status"] == "sent":
-        raise ValueError(f"Postcard already marked as sent on {postcard['date_sent']}.")
-
+    supabase = get_supabase()
     today = now_kl().strftime("%Y-%m-%d")
 
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        UPDATE postcards
-        SET status = ?, date_sent = ?
-        WHERE code = ?
-    """, ("sent", today, code))
-
-    conn.commit()
-    conn.close()
+    supabase.table("postcards").update({
+        "status": "sent",
+        "date_sent": today
+    }).eq("code", code).execute()
 
     return today
 
 
 def fetch_in_stock_postcards():
-    conn = get_connection()
-    cur = conn.cursor()
+    supabase = get_supabase()
+    res = supabase.table("postcards") \
+        .select("*") \
+        .eq("status", "in_stock") \
+        .not_.is_("code", None) \
+        .order("code") \
+        .execute()
 
-    cur.execute("""
-        SELECT id, code, description, theme, tags, status, image_path, notes
-        FROM postcards
-        WHERE status = 'in_stock'
-          AND code IS NOT NULL
-        ORDER BY code
-    """)
-
-    rows = cur.fetchall()
-    conn.close()
-
-    postcards = []
-    for row in rows:
-        postcards.append({
-            "id": row[0],
-            "code": row[1],
-            "description": row[2] or "",
-            "theme": row[3] or "",
-            "tags": row[4] or "",
-            "status": row[5] or "",
-            "image_path": row[6] or "",
-            "notes": row[7] or "",
-        })
-
-    return postcards
-
-
-def fetch_theme_stats():
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT
-            theme,
-            COUNT(*) AS total,
-            SUM(CASE WHEN status = 'in_stock' THEN 1 ELSE 0 END) AS in_stock,
-            SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) AS sent,
-            SUM(CASE WHEN status = 'draft' THEN 1 ELSE 0 END) AS draft,
-            SUM(CASE WHEN status = 'reserved' THEN 1 ELSE 0 END) AS reserved,
-            SUM(CASE WHEN status = 'given_away' THEN 1 ELSE 0 END) AS given_away
-        FROM postcards
-        WHERE theme IS NOT NULL
-        GROUP BY theme
-        ORDER BY theme
-    """)
-
-    rows = cur.fetchall()
-    conn.close()
-    return rows
-
-
-def log_request(profile_text, preferences, reranked):
-    conn = get_connection()
-    cur = conn.cursor()
-
-    suggested_codes = [item["code"] for item in reranked] if reranked else []
-
-    cur.execute("""
-        INSERT INTO request_logs (request_text, extracted_preferences, suggested_codes)
-        VALUES (?, ?, ?)
-    """, (
-        profile_text,
-        json.dumps(preferences, ensure_ascii=False),
-        json.dumps(suggested_codes, ensure_ascii=False)
-    ))
-
-    conn.commit()
-    conn.close()
-
-
-def get_request_theme_signals():
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT extracted_preferences
-        FROM request_logs
-    """)
-
-    rows = cur.fetchall()
-    conn.close()
-
-    theme_keywords = {
-        "Anime/Manga": ["anime", "manga", "doraemon", "ghibli", "naruto", "one piece", "harry potter", "marvel", "dc"],
-        "City Views": ["city", "skyline", "urban", "street", "buildings"],
-        "Art & Heritage": ["art", "heritage", "museum", "painting", "illustration", "traditional", "sherlock holmes", "alice in wonderland"],
-        "Landmarks": ["landmark", "lighthouse", "tower", "monument", "bridge"],
-        "Map": ["map", "atlas", "geography"],
-        "Transport": ["train", "car", "bus", "bicycle", "bike", "transport", "tram", "railway", "basketball players", "basketball", "nba", "stephen curry", "lebron james", "nikola jokic", "nicola jokich"],
-        "Nature": ["nature", "flower", "flowers", "forest", "mountain", "sea", "ocean", "tree", "feathers", "coconut", "cats", "dogs", "scottish fold"],
-        "Food & Culture": ["food", "culture", "cuisine", "meal", "festival food", "dish", "arabic things", "books"],
-        "Holidays & Festivals": ["holiday", "festival", "christmas", "new year", "cny", "celebration", "halloween", "dream catchers", "beauty and the beast", "phantom of the opera"]
-    }
-
-    request_counts = {theme: 0 for theme in THEME_MAP.keys()}
-
-    for row in rows:
-        extracted_json = row[0]
-        if not extracted_json:
-            continue
-
-        try:
-            prefs = json.loads(extracted_json)
-        except Exception:
-            continue
-
-        combined_items = []
-        for key in [
-            "strong_preferences",
-            "soft_preferences",
-            "themes_or_objects",
-            "fandoms_or_named_entities",
-            "animals"
-        ]:
-            values = prefs.get(key, [])
-            if isinstance(values, list):
-                combined_items.extend([str(v).lower() for v in values])
-
-        combined_text = " ".join(combined_items)
-
-        for theme, keywords in theme_keywords.items():
-            for kw in keywords:
-                if kw in combined_text:
-                    request_counts[theme] += 1
-                    break
-
-    return request_counts
-
-
-def get_restock_recommendations():
-    stats = fetch_theme_stats()
-    request_counts = get_request_theme_signals()
-
-    recommendations = []
-
-    for row in stats:
-        theme, total, in_stock, sent, draft, reserved, given_away = row
-
-        total = total or 0
-        in_stock = in_stock or 0
-        sent = sent or 0
-
-        requests_count = request_counts.get(theme, 0)
-
-        if in_stock <= 1:
-            stock_score = 5
-        elif in_stock <= 3:
-            stock_score = 4
-        elif in_stock <= 5:
-            stock_score = 3
-        elif in_stock <= 8:
-            stock_score = 2
-        else:
-            stock_score = 1
-
-        if sent >= 10:
-            sent_score = 5
-        elif sent >= 7:
-            sent_score = 4
-        elif sent >= 4:
-            sent_score = 3
-        elif sent >= 2:
-            sent_score = 2
-        elif sent >= 1:
-            sent_score = 1
-        else:
-            sent_score = 0
-
-        if requests_count >= 10:
-            request_score = 5
-        elif requests_count >= 7:
-            request_score = 4
-        elif requests_count >= 4:
-            request_score = 3
-        elif requests_count >= 2:
-            request_score = 2
-        elif requests_count >= 1:
-            request_score = 1
-        else:
-            request_score = 0
-
-        priority_score = stock_score + sent_score + request_score
-
-        base_target = 5
-        demand_boost = min(3, requests_count) + min(3, sent // 3)
-        target_stock = base_target + demand_boost
-        restock_qty = max(0, target_stock - in_stock)
-
-        recommendations.append({
-            "theme": theme,
-            "in_stock": in_stock,
-            "sent": sent,
-            "requests": requests_count,
-            "priority_score": priority_score,
-            "target_stock": target_stock,
-            "restock_qty": restock_qty
-        })
-
-    recommendations.sort(
-        key=lambda x: (-x["priority_score"], -x["restock_qty"], x["in_stock"], -x["sent"], -x["requests"])
-    )
-
-    return recommendations
-
+    return res.data
 
 # ===== AI HELPERS: IMAGE ANALYSIS =====
 def encode_image_to_base64(image_path):
